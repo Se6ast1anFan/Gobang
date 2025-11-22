@@ -25,15 +25,21 @@ hInstance       dd ?
 hWinMain        dd ?
 
 currentPlayer   dd 1              ; 1=黑棋  2=白棋
+gameOver        dd 0              ; 0=正常, 1=已结束
 board           dd 225 dup(0)     ; 15*15 棋盘数组, 0=空 1=黑 2=白
 
 szClassName     db "五子棋",0
+
+msgPlayerWin db "你赢了！",0
+msgAIWin     db "电脑赢了！",0
+msgTitle     db "游戏结束",0
 
 ;----------------------------------------
 .code
 
 _ComputerMoveSmart PROTO
 _EvaluateMove      PROTO :DWORD, :DWORD
+_CheckWin          PROTO :DWORD, :DWORD
 
 
 ;----------------------------------------
@@ -187,6 +193,11 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     LOCAL row:DWORD
     LOCAL idx:DWORD
 
+	; 如果游戏已结束，不能再落子
+    mov eax, gameOver
+    cmp eax, 1
+    je done_click
+
     ; 计算列 col = (xPos - BOARD_OFFSET) / GRID_SIZE
     mov eax, xPos
     sub eax, BOARD_OFFSET
@@ -243,11 +254,39 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     mov eax, currentPlayer
     mov [edx], eax
 
- ; 玩家落完，让电脑下
+	; 检查玩家是否获胜 (1 = 黑棋)
+    mov eax, idx
+    invoke _CheckWin, eax, 1
+    cmp eax, 1
+    je player_win
+
+	; 玩家落完，让电脑下
     invoke _ComputerMoveSmart
+    mov idx, eax        ; 保存电脑落子位置
+
+    cmp eax, 0FFFFFFFFh
+    je skip_ai_check    ; 如果没有落子，则跳过AI检测
+
+    ; 检查电脑是否获胜 (2 = 白棋)
+    invoke _CheckWin, idx, 2
+    cmp eax, 1
+    je ai_win
+
+skip_ai_check:
 
     ; 刷新棋盘
-    invoke InvalidateRect, hWinMain, NULL, TRUE
+invoke InvalidateRect, hWinMain, NULL, TRUE
+jmp done_click
+
+player_win:
+    mov gameOver, 1
+    invoke MessageBoxA, NULL, ADDR msgPlayerWin, ADDR msgTitle, MB_OK
+    jmp done_click
+
+ai_win:
+    mov gameOver, 1
+    invoke MessageBoxA, NULL, ADDR msgAIWin, ADDR msgTitle, MB_OK
+    jmp done_click
 
 
 done_click:
@@ -460,9 +499,17 @@ choose_done:
     mov eax, 2
     mov [ecx], eax
 
-no_move:
+    mov eax, bestIdx       ; 返回电脑落子位置
     ret
+
+no_move:
+    mov eax, 0FFFFFFFFh
+    ret
+
+
+; 正常返回 bestIdx
 _ComputerMoveSmart ENDP
+
 
 ;=========================================
 ; 评分函数：_EvaluateMove(idx, color)
@@ -865,6 +912,339 @@ d2_score_done:
     ret
 _EvaluateMove ENDP
 
+;=========================================
+; _CheckWin(idx, color)
+; 返回：
+;   eax = 1  -> 五子连线
+;   eax = 0  -> 未胜利
+;=========================================
+_CheckWin PROC uses esi edi ebx edx, idx:DWORD, color:DWORD
+    LOCAL row:DWORD
+    LOCAL col:DWORD
+    LOCAL count:DWORD
+    LOCAL rTemp:DWORD
+    LOCAL colTemp:DWORD
+
+    ;--- 计算 row 和 col ---
+    mov eax, idx
+    xor edx, edx
+    mov ebx, 15
+    div ebx             ; eax=row, edx=col
+    mov row, eax
+    mov col, edx
+
+    ;=========================================
+    ; 水平检查 (← →)
+    ;=========================================
+    mov count, 1
+
+    ; 向左
+    mov eax, col
+    dec eax
+    mov colTemp, eax
+
+h_left:
+    mov eax, colTemp
+    cmp eax, 0
+    jl h_left_end
+
+    mov edx, row
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTemp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne h_left_end
+
+    inc count
+    dec colTemp
+    jmp h_left
+
+h_left_end:
+
+    ; 向右
+    mov eax, col
+    inc eax
+    mov colTemp, eax
+
+h_right:
+    mov eax, colTemp
+    cmp eax, 14
+    jg h_right_end
+
+    mov edx, row
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTemp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne h_right_end
+
+    inc count
+    inc colTemp
+    jmp h_right
+
+h_right_end:
+
+    cmp count, 5
+    jge win_found
+
+
+    ;=========================================
+    ; 垂直检查 (↑ ↓)
+    ;=========================================
+    mov count, 1
+
+    ; 向上
+    mov eax, row
+    dec eax
+    mov rTemp, eax
+
+v_up:
+    mov eax, rTemp
+    cmp eax, 0
+    jl v_up_end
+
+    mov edx, rTemp
+    mov ebx, 15
+    imul edx, ebx
+    add edx, col
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne v_up_end
+
+    inc count
+    dec rTemp
+    jmp v_up
+
+v_up_end:
+
+    ; 向下
+    mov eax, row
+    inc eax
+    mov rTemp, eax
+
+v_down:
+    mov eax, rTemp
+    cmp eax, 14
+    jg v_down_end
+
+    mov edx, rTemp
+    mov ebx, 15
+    imul edx, ebx
+    add edx, col
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne v_down_end
+
+    inc count
+    inc rTemp
+    jmp v_down
+
+v_down_end:
+
+    cmp count, 5
+    jge win_found
+
+
+    ;=========================================
+    ; 主对角线检查 (\)
+    ;=========================================
+    mov count, 1
+
+    ; 左上
+    mov eax, row
+    dec eax
+    mov rTemp, eax
+    mov eax, col
+    dec eax
+    mov colTemp, eax
+
+d1_up_left:
+    mov eax, rTemp
+    cmp eax, 0
+    jl d1_up_left_end
+    mov eax, colTemp
+    cmp eax, 0
+    jl d1_up_left_end
+
+    mov edx, rTemp
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTemp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne d1_up_left_end
+
+    inc count
+    dec rTemp
+    dec colTemp
+    jmp d1_up_left
+
+d1_up_left_end:
+
+    ; 右下
+    mov eax, row
+    inc eax
+    mov rTemp, eax
+    mov eax, col
+    inc eax
+    mov colTemp, eax
+
+d1_down_right:
+    mov eax, rTemp
+    cmp eax, 14
+    jg d1_down_right_end
+    mov eax, colTemp
+    cmp eax, 14
+    jg d1_down_right_end
+
+    mov edx, rTemp
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTemp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne d1_down_right_end
+
+    inc count
+    inc rTemp
+    inc colTemp
+    jmp d1_down_right
+
+d1_down_right_end:
+
+    cmp count, 5
+    jge win_found
+
+
+    ;=========================================
+    ; 副对角线检查 (/)
+    ;=========================================
+    mov count, 1
+
+    ; 左下
+    mov eax, row
+    inc eax
+    mov rTemp, eax
+    mov eax, col
+    dec eax
+    mov colTemp, eax
+
+d2_down_left:
+    mov eax, rTemp
+    cmp eax, 14
+    jg d2_down_left_end
+    mov eax, colTemp
+    cmp eax, 0
+    jl d2_down_left_end
+
+    mov edx, rTemp
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTemp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne d2_down_left_end
+
+    inc count
+    inc rTemp
+    dec colTemp
+    jmp d2_down_left
+
+d2_down_left_end:
+
+    ; 右上
+    mov eax, row
+    dec eax
+    mov rTemp, eax
+    mov eax, col
+    inc eax
+    mov colTemp, eax
+
+d2_up_right:
+    mov eax, rTemp
+    cmp eax, 0
+    jl d2_up_right_end
+    mov eax, colTemp
+    cmp eax, 14
+    jg d2_up_right_end
+
+    mov edx, rTemp
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTemp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+
+    mov eax, [esi]
+    cmp eax, color
+    jne d2_up_right_end
+
+    inc count
+    dec rTemp
+    inc colTemp
+    jmp d2_up_right
+
+d2_up_right_end:
+
+    cmp count, 5
+    jge win_found
+
+    ; 没赢
+    xor eax, eax
+    ret
+
+win_found:
+    mov eax, 1
+    ret
+
+_CheckWin ENDP
 
 ;----------------------------------------
 ; 程序入口
