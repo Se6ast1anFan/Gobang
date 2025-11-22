@@ -32,6 +32,8 @@ szClassName     db "五子棋",0
 ;----------------------------------------
 .code
 
+_ComputerMoveSimple PROTO
+
 ;----------------------------------------
 ; 清空棋盘
 ;----------------------------------------
@@ -239,13 +241,12 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     mov eax, currentPlayer
     mov [edx], eax
 
-    ; 切换当前玩家
-    cmp currentPlayer, 1
-    jne set_black
-    mov currentPlayer, 2
-    jmp done_click
-set_black:
-    mov currentPlayer, 1
+ ; 玩家落完，让电脑下
+    invoke _ComputerMoveSimple
+
+    ; 刷新棋盘
+    invoke InvalidateRect, hWinMain, NULL, TRUE
+
 
 done_click:
     ret
@@ -377,12 +378,43 @@ end_loop:
     ret
 _WinMain ENDP
 
+_ComputerMoveSimple PROC
+    LOCAL idx:DWORD
+
+    mov idx, 0
+
+find_empty:
+    cmp idx, 225
+    jge no_move
+
+    mov eax, idx
+    imul eax, 4
+    mov edx, OFFSET board
+    add edx, eax
+    mov eax, [edx]
+    cmp eax, 0
+    jne next_cell
+
+    mov eax, 2
+    mov [edx], eax
+    jmp done_move
+
+next_cell:
+    inc idx
+    jmp find_empty
+
+no_move:
+done_move:
+    ret
+_ComputerMoveSimple ENDP
+
 ;----------------------------------------
 ; 程序入口
 ;----------------------------------------
 main PROC
     call _WinMain
     invoke ExitProcess, 0
+
 main ENDP
 
 END main
