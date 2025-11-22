@@ -32,7 +32,9 @@ szClassName     db "五子棋",0
 ;----------------------------------------
 .code
 
-_ComputerMoveSimple PROTO
+_ComputerMoveSmart PROTO
+_EvaluateMove      PROTO :DWORD, :DWORD
+
 
 ;----------------------------------------
 ; 清空棋盘
@@ -242,7 +244,7 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     mov [edx], eax
 
  ; 玩家落完，让电脑下
-    invoke _ComputerMoveSimple
+    invoke _ComputerMoveSmart
 
     ; 刷新棋盘
     invoke InvalidateRect, hWinMain, NULL, TRUE
@@ -378,35 +380,491 @@ end_loop:
     ret
 _WinMain ENDP
 
-_ComputerMoveSimple PROC
+;=========================================
+; 智能电脑落子：综合进攻 + 防守评分
+;=========================================
+_ComputerMoveSmart PROC uses esi edi ebx
     LOCAL idx:DWORD
+    LOCAL bestIdx:DWORD
+    LOCAL bestScore:DWORD
+    LOCAL attack:DWORD
+    LOCAL defense:DWORD
+    LOCAL temp:DWORD
+
+    ; bestIdx = -1, bestScore = -1
+    mov bestIdx, 0FFFFFFFFh
+    mov bestScore, 0FFFFFFFFh
 
     mov idx, 0
 
-find_empty:
+check_loop:
     cmp idx, 225
-    jge no_move
+    jge choose_done
 
+    ; 如果 board[idx] != 0，跳过
     mov eax, idx
     imul eax, 4
     mov edx, OFFSET board
     add edx, eax
     mov eax, [edx]
     cmp eax, 0
-    jne next_cell
+    jne next_idx
 
+    ; attack = 电脑在此落子（白棋=2）的分
+    mov eax, idx
+    invoke _EvaluateMove, eax, 2
+    mov attack, eax
+
+    ; defense = 玩家在此落子（黑棋=1）的分
+    mov eax, idx
+    invoke _EvaluateMove, eax, 1
+    mov defense, eax
+
+    ; temp = attack*2 + defense*3
+    mov eax, attack
+    lea eax, [eax*2]          ; eax = attack * 2
+    mov temp, eax
+
+    mov eax, defense
+    imul eax, 3               ; eax = defense * 3
+    add temp, eax             ; temp = 2A + 3D
+
+    ; 如果 temp > bestScore，就更新
+    mov eax, temp
+    mov edx, bestScore
+    cmp eax, edx
+    jle next_idx
+
+    ; 更新 bestScore, bestIdx
+    mov bestScore, eax
+    mov eax, idx
+    mov bestIdx, eax
+
+next_idx:
+    mov eax, idx
+    inc eax
+    mov idx, eax
+    jmp check_loop
+
+choose_done:
+    ; 没找到就直接返回
+    mov eax, bestIdx
+    cmp eax, 0FFFFFFFFh
+    je no_move
+
+    ; board[bestIdx] = 2 (白棋)
+    mov edx, bestIdx
+    imul edx, 4
+    mov ecx, OFFSET board
+    add ecx, edx
     mov eax, 2
-    mov [edx], eax
-    jmp done_move
-
-next_cell:
-    inc idx
-    jmp find_empty
+    mov [ecx], eax
 
 no_move:
-done_move:
     ret
-_ComputerMoveSimple ENDP
+_ComputerMoveSmart ENDP
+
+;=========================================
+; 评分函数：_EvaluateMove(idx, color)
+; 返回：eax = 此位置对该 color 的价值
+;=========================================
+_EvaluateMove PROC uses esi edi ebx, idx:DWORD, color:DWORD
+    LOCAL row:DWORD
+    LOCAL col:DWORD
+    LOCAL total:DWORD
+    LOCAL len:DWORD
+    LOCAL r:DWORD
+    LOCAL colTmp:DWORD
+    LOCAL scoreDir:DWORD
+
+    ; 计算 row = idx / 15, col = idx % 15
+    mov eax, idx
+    xor edx, edx
+    mov ebx, 15
+    div ebx             ; eax=row, edx=col
+    mov row, eax
+    mov col, edx
+
+    mov total, 0
+
+    ;------------------ 水平方向 ------------------
+    mov len, 1          ; 把当前位置当作已落子
+
+    ; 向左
+    mov eax, col
+    dec eax
+    mov colTmp, eax
+
+h_left:
+    mov eax, colTmp
+    cmp eax, 0
+    jl h_left_done
+
+    mov edx, row
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTmp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne h_left_done
+
+    inc len
+    dec colTmp
+    jmp h_left
+
+h_left_done:
+
+    ; 向右
+    mov eax, col
+    inc eax
+    mov colTmp, eax
+
+h_right:
+    mov eax, colTmp
+    cmp eax, 14
+    jg h_right_done
+
+    mov edx, row
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTmp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne h_right_done
+
+    inc len
+    inc colTmp
+    jmp h_right
+
+h_right_done:
+
+    ; 根据 len 加分
+    mov scoreDir, 0
+    mov eax, len
+    cmp eax, 5
+    jl  h_len_not5
+    mov scoreDir, 10000
+    jmp h_score_done
+h_len_not5:
+    cmp eax, 4
+    jne h_len_not4
+    mov scoreDir, 1000
+    jmp h_score_done
+h_len_not4:
+    cmp eax, 3
+    jne h_len_not3
+    mov scoreDir, 100
+    jmp h_score_done
+h_len_not3:
+    cmp eax, 2
+    jne h_score_done
+    mov scoreDir, 10
+h_score_done:
+    mov eax, total
+    add eax, scoreDir
+    mov total, eax
+
+    ;------------------ 垂直方向 ------------------
+    mov len, 1
+
+    ; 向上（row-1）
+    mov eax, row
+    dec eax
+    mov r, eax
+
+v_up:
+    mov eax, r
+    cmp eax, 0
+    jl v_up_done
+
+    mov edx, eax
+    mov ebx, 15
+    imul edx, ebx
+    add edx, col
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne v_up_done
+
+    inc len
+    dec r
+    jmp v_up
+
+v_up_done:
+
+    ; 向下（row+1）
+    mov eax, row
+    inc eax
+    mov r, eax
+
+v_down:
+    mov eax, r
+    cmp eax, 14
+    jg v_down_done
+
+    mov edx, eax
+    mov ebx, 15
+    imul edx, ebx
+    add edx, col
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne v_down_done
+
+    inc len
+    inc r
+    jmp v_down
+
+v_down_done:
+
+    mov scoreDir, 0
+    mov eax, len
+    cmp eax, 5
+    jl  v_len_not5
+    mov scoreDir, 10000
+    jmp v_score_done
+v_len_not5:
+    cmp eax, 4
+    jne v_len_not4
+    mov scoreDir, 1000
+    jmp v_score_done
+v_len_not4:
+    cmp eax, 3
+    jne v_len_not3
+    mov scoreDir, 100
+    jmp v_score_done
+v_len_not3:
+    cmp eax, 2
+    jne v_score_done
+    mov scoreDir, 10
+v_score_done:
+    mov eax, total
+    add eax, scoreDir
+    mov total, eax
+
+    ;------------------ 斜线方向1 (\) ------------------
+    mov len, 1
+
+    ; 左上 (row-1, col-1)
+    mov eax, row
+    dec eax
+    mov r, eax
+    mov eax, col
+    dec eax
+    mov colTmp, eax
+
+d1_up_left:
+    mov eax, r
+    cmp eax, 0
+    jl d1_up_left_done
+    mov eax, colTmp
+    cmp eax, 0
+    jl d1_up_left_done
+
+    mov edx, r
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTmp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne d1_up_left_done
+
+    inc len
+    dec r
+    dec colTmp
+    jmp d1_up_left
+
+d1_up_left_done:
+
+    ; 右下 (row+1, col+1)
+    mov eax, row
+    inc eax
+    mov r, eax
+    mov eax, col
+    inc eax
+    mov colTmp, eax
+
+d1_down_right:
+    mov eax, r
+    cmp eax, 14
+    jg d1_down_right_done
+    mov eax, colTmp
+    cmp eax, 14
+    jg d1_down_right_done
+
+    mov edx, r
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTmp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne d1_down_right_done
+
+    inc len
+    inc r
+    inc colTmp
+    jmp d1_down_right
+
+d1_down_right_done:
+
+    mov scoreDir, 0
+    mov eax, len
+    cmp eax, 5
+    jl  d1_len_not5
+    mov scoreDir, 10000
+    jmp d1_score_done
+d1_len_not5:
+    cmp eax, 4
+    jne d1_len_not4
+    mov scoreDir, 1000
+    jmp d1_score_done
+d1_len_not4:
+    cmp eax, 3
+    jne d1_len_not3
+    mov scoreDir, 100
+    jmp d1_score_done
+d1_len_not3:
+    cmp eax, 2
+    jne d1_score_done
+    mov scoreDir, 10
+d1_score_done:
+    mov eax, total
+    add eax, scoreDir
+    mov total, eax
+
+    ;------------------ 斜线方向2 (/) ------------------
+    mov len, 1
+
+    ; 左下 (row+1, col-1)
+    mov eax, row
+    inc eax
+    mov r, eax
+    mov eax, col
+    dec eax
+    mov colTmp, eax
+
+d2_down_left:
+    mov eax, r
+    cmp eax, 14
+    jg d2_down_left_done
+    mov eax, colTmp
+    cmp eax, 0
+    jl d2_down_left_done
+
+    mov edx, r
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTmp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne d2_down_left_done
+
+    inc len
+    inc r
+    dec colTmp
+    jmp d2_down_left
+
+d2_down_left_done:
+
+    ; 右上 (row-1, col+1)
+    mov eax, row
+    dec eax
+    mov r, eax
+    mov eax, col
+    inc eax
+    mov colTmp, eax
+
+d2_up_right:
+    mov eax, r
+    cmp eax, 0
+    jl d2_up_right_done
+    mov eax, colTmp
+    cmp eax, 14
+    jg d2_up_right_done
+
+    mov edx, r
+    mov ebx, 15
+    imul edx, ebx
+    add edx, colTmp
+
+    mov esi, OFFSET board
+    mov ebx, edx
+    imul ebx, 4
+    add esi, ebx
+    mov eax, [esi]
+    cmp eax, color
+    jne d2_up_right_done
+
+    inc len
+    dec r
+    inc colTmp
+    jmp d2_up_right
+
+d2_up_right_done:
+
+    mov scoreDir, 0
+    mov eax, len
+    cmp eax, 5
+    jl  d2_len_not5
+    mov scoreDir, 10000
+    jmp d2_score_done
+d2_len_not5:
+    cmp eax, 4
+    jne d2_len_not4
+    mov scoreDir, 1000
+    jmp d2_score_done
+d2_len_not4:
+    cmp eax, 3
+    jne d2_len_not3
+    mov scoreDir, 100
+    jmp d2_score_done
+d2_len_not3:
+    cmp eax, 2
+    jne d2_score_done
+    mov scoreDir, 10
+d2_score_done:
+    mov eax, total
+    add eax, scoreDir
+    mov total, eax
+
+    ; 返回总分
+    mov eax, total
+    ret
+_EvaluateMove ENDP
+
 
 ;----------------------------------------
 ; 程序入口
