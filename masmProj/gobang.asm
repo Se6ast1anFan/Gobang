@@ -19,20 +19,37 @@ GRID_SIZE       equ 30            ; 每个格子像素
 BOARD_OFFSET    equ 30            ; 棋盘左上角起始偏移
 BOARD_COUNT     equ 15            ; 15x15 棋盘
 
+MODE_PVP        equ 0             ; 二人对弈
+MODE_AI         equ 1             ; 对战电脑
+
+BTN_PVP         equ 1001          ; “二人对弈”按钮ID
+BTN_AI          equ 1002          ; “对战电脑”按钮ID
+
 ;----------------------------------------
 .data
 hInstance       dd ?
 hWinMain        dd ?
 
-currentPlayer   dd 1              ; 1=黑棋  2=白棋
+currentPlayer   dd 1              ; 当前落子方：1=黑棋  2=白棋
+gameMode        dd MODE_PVP       ; 0=二人对弈  1=对战电脑
 gameOver        dd 0              ; 0=正常, 1=已结束
+
 board           dd 225 dup(0)     ; 15*15 棋盘数组, 0=空 1=黑 2=白
 
 szClassName     db "五子棋",0
 
-msgPlayerWin db "你赢了！",0
-msgAIWin     db "电脑赢了！",0
-msgTitle     db "游戏结束",0
+; 按钮文字与类名
+szButtonClass   db "BUTTON",0
+szBtnPVPText    db "二人对弈",0
+szBtnAIText     db "对战电脑",0
+
+; 提示信息
+msgPlayerWin    db "你赢了！",0
+msgAIWin        db "电脑赢了！",0
+msgTitle        db "游戏结束",0
+
+msgBlackWin     db "黑棋赢了！",0
+msgWhiteWin     db "白棋赢了！",0
 
 ;----------------------------------------
 .code
@@ -193,7 +210,7 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     LOCAL row:DWORD
     LOCAL idx:DWORD
 
-	; 如果游戏已结束，不能再落子
+    ; 如果游戏已结束，不能再落子
     mov eax, gameOver
     cmp eax, 1
     je done_click
@@ -203,7 +220,7 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     sub eax, BOARD_OFFSET
     cmp eax, 0
     jl done_click
-	add eax, GRID_SIZE/2
+    add eax, GRID_SIZE/2        ; 吸附到最近网格
     xor edx, edx
     mov ebx, GRID_SIZE
     div ebx
@@ -214,7 +231,7 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     sub eax, BOARD_OFFSET
     cmp eax, 0
     jl done_click
-	add eax, GRID_SIZE/2
+    add eax, GRID_SIZE/2
     xor edx, edx
     mov ebx, GRID_SIZE
     div ebx
@@ -250,42 +267,87 @@ _OnClick PROC xPos:DWORD, yPos:DWORD
     cmp eax, 0
     jne done_click
 
-    ; 落子：board[idx] = currentPlayer
+    ;--------------------------------
+    ; 玩家落子：board[idx] = currentPlayer
+    ;--------------------------------
     mov eax, currentPlayer
-    mov [edx], eax
+    mov [edx], eax        ; edx 指向 board[idx]
 
-	; 检查玩家是否获胜 (1 = 黑棋)
+    ;--------------------------------
+    ; 根据模式分支
+    ;--------------------------------
+    mov eax, gameMode
+    cmp eax, MODE_PVP
+    je mode_pvp
+
+    ;================================
+    ;        模式：对战电脑
+    ;================================
+mode_ai:
+    ; 玩家固定为黑棋(1)
     mov eax, idx
     invoke _CheckWin, eax, 1
     cmp eax, 1
-    je player_win
+    je player_win_ai
 
-	; 玩家落完，让电脑下
+    ; 电脑落子：返回 aiIdx 或 0FFFFFFFFh
     invoke _ComputerMoveSmart
-    mov idx, eax        ; 保存电脑落子位置
-
     cmp eax, 0FFFFFFFFh
-    je skip_ai_check    ; 如果没有落子，则跳过AI检测
+    je after_ai_move
 
-    ; 检查电脑是否获胜 (2 = 白棋)
-    invoke _CheckWin, idx, 2
+    ; eax = aiIdx，用于检查电脑是否获胜
+    mov ecx, eax
+    invoke _CheckWin, ecx, 2
     cmp eax, 1
     je ai_win
 
-skip_ai_check:
+after_ai_move:
+    invoke InvalidateRect, hWinMain, NULL, TRUE
+    jmp done_click
 
-    ; 刷新棋盘
-invoke InvalidateRect, hWinMain, NULL, TRUE
-jmp done_click
-
-player_win:
+player_win_ai:
     mov gameOver, 1
+    invoke InvalidateRect, hWinMain, NULL, TRUE
     invoke MessageBoxA, NULL, ADDR msgPlayerWin, ADDR msgTitle, MB_OK
     jmp done_click
 
 ai_win:
     mov gameOver, 1
+    invoke InvalidateRect, hWinMain, NULL, TRUE
     invoke MessageBoxA, NULL, ADDR msgAIWin, ADDR msgTitle, MB_OK
+    jmp done_click
+
+    ;================================
+    ;        模式：二人对弈
+    ;================================
+mode_pvp:
+    ; 当前玩家刚刚在 idx 落子
+    mov eax, idx
+    mov ecx, currentPlayer
+    invoke _CheckWin, eax, ecx
+    cmp eax, 1
+    je pvp_win
+
+    ; 未分出胜负 -> 切换玩家
+    cmp currentPlayer, 1
+    jne set_black
+    mov currentPlayer, 2
+    jmp after_switch
+set_black:
+    mov currentPlayer, 1
+after_switch:
+    invoke InvalidateRect, hWinMain, NULL, TRUE
+    jmp done_click
+
+pvp_win:
+    mov gameOver, 1
+    invoke InvalidateRect, hWinMain, NULL, TRUE
+    cmp currentPlayer, 1
+    je msg_black
+    invoke MessageBoxA, NULL, ADDR msgWhiteWin, ADDR msgTitle, MB_OK
+    jmp done_click
+msg_black:
+    invoke MessageBoxA, NULL, ADDR msgBlackWin, ADDR msgTitle, MB_OK
     jmp done_click
 
 
@@ -304,7 +366,7 @@ _ProcWinMain PROC hWnd:DWORD, uMsg:DWORD, wParam:DWORD, lParam:DWORD
 
     ; 左键落子
     cmp uMsg, WM_LBUTTONDOWN
-    jne chk_paint
+    jne chk_command
 
     mov eax, lParam
     and eax, 0FFFFh
@@ -316,6 +378,41 @@ _ProcWinMain PROC hWnd:DWORD, uMsg:DWORD, wParam:DWORD, lParam:DWORD
     invoke _OnClick, xPos, yPos
     invoke InvalidateRect, hWnd, NULL, TRUE
 
+    xor eax, eax
+    ret
+
+chk_command:
+    cmp uMsg, WM_COMMAND
+    jne chk_paint
+
+    ; 低位字是控件ID
+    mov eax, wParam
+    and eax, 0FFFFh
+    cmp eax, BTN_PVP
+    je cmd_pvp
+    cmp eax, BTN_AI
+    je cmd_ai
+    jmp cmd_end
+
+cmd_pvp:
+    mov gameMode, MODE_PVP
+    mov gameOver, 0
+    mov currentPlayer, 1
+    invoke _ClearBoard
+    invoke InvalidateRect, hWnd, NULL, TRUE
+    xor eax, eax
+    ret
+
+cmd_ai:
+    mov gameMode, MODE_AI
+    mov gameOver, 0
+    mov currentPlayer, 1
+    invoke _ClearBoard
+    invoke InvalidateRect, hWnd, NULL, TRUE
+    xor eax, eax
+    ret
+
+cmd_end:
     xor eax, eax
     ret
 
@@ -391,7 +488,7 @@ _WinMain PROC
     ; 注册
     invoke RegisterClassEx, ADDR wc
 
-    ; 创建窗口
+    ; 创建主窗口
     invoke CreateWindowEx, 0, \
            OFFSET szClassName, OFFSET szClassName, \
            WS_OVERLAPPEDWINDOW, \
@@ -405,6 +502,21 @@ _WinMain PROC
     invoke UpdateWindow, hWinMain
 
     invoke _ClearBoard
+
+    ;--------------------------------
+    ; 创建右侧两个按钮
+    ;--------------------------------
+    invoke CreateWindowEx, 0, \
+           ADDR szButtonClass, ADDR szBtnPVPText, \
+           WS_CHILD or WS_VISIBLE or BS_PUSHBUTTON, \
+           460, 80, 100, 30, \
+           hWinMain, BTN_PVP, hInstance, NULL
+
+    invoke CreateWindowEx, 0, \
+           ADDR szButtonClass, ADDR szBtnAIText, \
+           WS_CHILD or WS_VISIBLE or BS_PUSHBUTTON, \
+           460, 130, 100, 30, \
+           hWinMain, BTN_AI, hInstance, NULL
 
 
 msg_loop:
@@ -421,6 +533,7 @@ _WinMain ENDP
 
 ;=========================================
 ; 智能电脑落子：综合进攻 + 防守评分
+; 返回：eax = 电脑落子位置 idx，或 0FFFFFFFFh 表示没落子
 ;=========================================
 _ComputerMoveSmart PROC uses esi edi ebx
     LOCAL idx:DWORD
@@ -430,9 +543,8 @@ _ComputerMoveSmart PROC uses esi edi ebx
     LOCAL defense:DWORD
     LOCAL temp:DWORD
 
-    ; bestIdx = -1, bestScore = -1
     mov bestIdx, 0FFFFFFFFh
-    mov bestScore, 0FFFFFFFFh
+    mov bestScore, 0          ; 初始评分为0
 
     mov idx, 0
 
@@ -470,11 +582,9 @@ check_loop:
 
     ; 如果 temp > bestScore，就更新
     mov eax, temp
-    mov edx, bestScore
-    cmp eax, edx
+    cmp eax, bestScore
     jle next_idx
 
-    ; 更新 bestScore, bestIdx
     mov bestScore, eax
     mov eax, idx
     mov bestIdx, eax
@@ -486,30 +596,24 @@ next_idx:
     jmp check_loop
 
 choose_done:
-    ; 没找到就直接返回
     mov eax, bestIdx
     cmp eax, 0FFFFFFFFh
     je no_move
 
     ; board[bestIdx] = 2 (白棋)
-    mov edx, bestIdx
+    mov edx, eax          ; edx = bestIdx
     imul edx, 4
     mov ecx, OFFSET board
     add ecx, edx
-    mov eax, 2
-    mov [ecx], eax
+    mov dword ptr [ecx], 2
 
-    mov eax, bestIdx       ; 返回电脑落子位置
+    ; 返回 bestIdx
     ret
 
 no_move:
     mov eax, 0FFFFFFFFh
     ret
-
-
-; 正常返回 bestIdx
 _ComputerMoveSmart ENDP
-
 
 ;=========================================
 ; 评分函数：_EvaluateMove(idx, color)
@@ -943,10 +1047,10 @@ _CheckWin PROC uses esi edi ebx edx, idx:DWORD, color:DWORD
     dec eax
     mov colTemp, eax
 
-h_left:
+h2_left:
     mov eax, colTemp
     cmp eax, 0
-    jl h_left_end
+    jl h2_left_end
 
     mov edx, row
     mov ebx, 15
@@ -960,23 +1064,23 @@ h_left:
 
     mov eax, [esi]
     cmp eax, color
-    jne h_left_end
+    jne h2_left_end
 
     inc count
     dec colTemp
-    jmp h_left
+    jmp h2_left
 
-h_left_end:
+h2_left_end:
 
     ; 向右
     mov eax, col
     inc eax
     mov colTemp, eax
 
-h_right:
+h2_right:
     mov eax, colTemp
     cmp eax, 14
-    jg h_right_end
+    jg h2_right_end
 
     mov edx, row
     mov ebx, 15
@@ -990,13 +1094,13 @@ h_right:
 
     mov eax, [esi]
     cmp eax, color
-    jne h_right_end
+    jne h2_right_end
 
     inc count
     inc colTemp
-    jmp h_right
+    jmp h2_right
 
-h_right_end:
+h2_right_end:
 
     cmp count, 5
     jge win_found
@@ -1012,10 +1116,10 @@ h_right_end:
     dec eax
     mov rTemp, eax
 
-v_up:
+v2_up:
     mov eax, rTemp
     cmp eax, 0
-    jl v_up_end
+    jl v2_up_end
 
     mov edx, rTemp
     mov ebx, 15
@@ -1029,23 +1133,23 @@ v_up:
 
     mov eax, [esi]
     cmp eax, color
-    jne v_up_end
+    jne v2_up_end
 
     inc count
     dec rTemp
-    jmp v_up
+    jmp v2_up
 
-v_up_end:
+v2_up_end:
 
     ; 向下
     mov eax, row
     inc eax
     mov rTemp, eax
 
-v_down:
+v2_down:
     mov eax, rTemp
     cmp eax, 14
-    jg v_down_end
+    jg v2_down_end
 
     mov edx, rTemp
     mov ebx, 15
@@ -1059,13 +1163,13 @@ v_down:
 
     mov eax, [esi]
     cmp eax, color
-    jne v_down_end
+    jne v2_down_end
 
     inc count
     inc rTemp
-    jmp v_down
+    jmp v2_down
 
-v_down_end:
+v2_down_end:
 
     cmp count, 5
     jge win_found
@@ -1084,13 +1188,13 @@ v_down_end:
     dec eax
     mov colTemp, eax
 
-d1_up_left:
+d1_2_up_left:
     mov eax, rTemp
     cmp eax, 0
-    jl d1_up_left_end
+    jl d1_2_up_left_end
     mov eax, colTemp
     cmp eax, 0
-    jl d1_up_left_end
+    jl d1_2_up_left_end
 
     mov edx, rTemp
     mov ebx, 15
@@ -1104,14 +1208,14 @@ d1_up_left:
 
     mov eax, [esi]
     cmp eax, color
-    jne d1_up_left_end
+    jne d1_2_up_left_end
 
     inc count
     dec rTemp
     dec colTemp
-    jmp d1_up_left
+    jmp d1_2_up_left
 
-d1_up_left_end:
+d1_2_up_left_end:
 
     ; 右下
     mov eax, row
@@ -1121,13 +1225,13 @@ d1_up_left_end:
     inc eax
     mov colTemp, eax
 
-d1_down_right:
+d1_2_down_right:
     mov eax, rTemp
     cmp eax, 14
-    jg d1_down_right_end
+    jg d1_2_down_right_end
     mov eax, colTemp
     cmp eax, 14
-    jg d1_down_right_end
+    jg d1_2_down_right_end
 
     mov edx, rTemp
     mov ebx, 15
@@ -1141,14 +1245,14 @@ d1_down_right:
 
     mov eax, [esi]
     cmp eax, color
-    jne d1_down_right_end
+    jne d1_2_down_right_end
 
     inc count
     inc rTemp
     inc colTemp
-    jmp d1_down_right
+    jmp d1_2_down_right
 
-d1_down_right_end:
+d1_2_down_right_end:
 
     cmp count, 5
     jge win_found
@@ -1167,13 +1271,13 @@ d1_down_right_end:
     dec eax
     mov colTemp, eax
 
-d2_down_left:
+d2_2_down_left:
     mov eax, rTemp
     cmp eax, 14
-    jg d2_down_left_end
+    jg d2_2_down_left_end
     mov eax, colTemp
     cmp eax, 0
-    jl d2_down_left_end
+    jl d2_2_down_left_end
 
     mov edx, rTemp
     mov ebx, 15
@@ -1187,14 +1291,14 @@ d2_down_left:
 
     mov eax, [esi]
     cmp eax, color
-    jne d2_down_left_end
+    jne d2_2_down_left_end
 
     inc count
     inc rTemp
     dec colTemp
-    jmp d2_down_left
+    jmp d2_2_down_left
 
-d2_down_left_end:
+d2_2_down_left_end:
 
     ; 右上
     mov eax, row
@@ -1204,13 +1308,13 @@ d2_down_left_end:
     inc eax
     mov colTemp, eax
 
-d2_up_right:
+d2_2_up_right:
     mov eax, rTemp
     cmp eax, 0
-    jl d2_up_right_end
+    jl d2_2_up_right_end
     mov eax, colTemp
     cmp eax, 14
-    jg d2_up_right_end
+    jg d2_2_up_right_end
 
     mov edx, rTemp
     mov ebx, 15
@@ -1224,14 +1328,14 @@ d2_up_right:
 
     mov eax, [esi]
     cmp eax, color
-    jne d2_up_right_end
+    jne d2_2_up_right_end
 
     inc count
     dec rTemp
     inc colTemp
-    jmp d2_up_right
+    jmp d2_2_up_right
 
-d2_up_right_end:
+d2_2_up_right_end:
 
     cmp count, 5
     jge win_found
@@ -1252,7 +1356,6 @@ _CheckWin ENDP
 main PROC
     call _WinMain
     invoke ExitProcess, 0
-
 main ENDP
 
 END main
